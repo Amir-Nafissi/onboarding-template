@@ -151,14 +151,14 @@ VERDICT: PASS | CHANGES_REQUESTED
 
 | Field | Value |
 | --- | --- |
-| Run status | `READY` |
+| Run status | `RUNNING` |
 | Phase | `INITIAL` |
 | Inner iteration | `0` |
 | Outer iteration | `0` |
 | Last coder ref | `—` |
 | Last design verdict | `—` |
 | Last performance verdict | `—` |
-| Next action | `orchestrator: dispatch coder` |
+| Next action | `coder: implement src/submission.hpp` |
 | `SCORE_TARGET` | `3.0` |
 | `ROOFLINE_EFFICIENCY` | `70%` |
 | `MAX_INNER` / `MAX_OUTER` | `5` / `6` |
@@ -202,3 +202,62 @@ VERDICT: PASS | CHANGES_REQUESTED
 > table, then dispatch `coder` with the task and append a `TASK` entry. Route each
 > reviewer's findings to `coder` and append a `STATE` entry per transition. Exit only
 > on `performance-architect` `VERDICT: PASS`, then append a `DONE` entry.
+
+### [0002] 2026-02-14 00:00Z — orchestrator — TASK
+
+**Phase:** INITIAL
+**Iteration:** inner=0 outer=0
+**Action:** Run (re)started. All loop agents pinned to `deepseek/deepseek-flash`
+(DeepSeek V4.1 Flash); previous attempt on the inherited Pro model was stopped.
+Dispatching `coder` to implement `src/submission.hpp` end-to-end against
+`REQUIREMENTS.md`, `DESIGN.md`, and `PERFORMANCE.md`.
+**Routing:** —
+**Budget:** MAX_INNER=5 MAX_OUTER=6
+**Targets:** SCORE_TARGET=3.0, ROOFLINE_EFFICIENCY=70%
+
+### [0003] 2026-09-19 17:18Z — coder — FIX
+
+**Phase:** INITIAL
+**Iteration:** inner=0 outer=0
+**Trigger:** TASK [0002] — implement `src/submission.hpp` end-to-end.
+**Changes:**
+- `src/submission.hpp` — replaced the stub with the full implementation. One flat,
+  row-major, 64-byte-aligned RAII buffer with `stride = round_up(cols, 8)` kept
+  separate from `cols` (D1/D2/D3); rule-of-zero `Grid` preserving the declared
+  constructor and both `operator()` overloads (D4); non-owning
+  `ConstGridView`/`GridView` carrying pointer + shape (D5/D11); documented no-alias
+  contract with `__restrict__` row pointers and debug-only identity plus
+  pointer-range disjointness asserts (D6); verbatim boundary copy folded into one
+  `#pragma omp parallel for schedule(static)` row loop, boundary rows via `memcpy`
+  of exactly `cols` logical elements (D7); hoisted row bases and a SIMD-friendly
+  inner loop with a canonical `j < last` bound required by `omp simd` (D8/D9);
+  OpenMP over output rows with no hardcoded thread count (D10); `#pragma once`,
+  `inline` helpers, no anonymous namespace (D12). Guards: early return for
+  `rows == 0 || cols == 0`, `i + 1 == rows` boundary test (no unsigned underflow),
+  overflow-checked padded stride and `rows * stride`.
+**Findings addressed:**
+- none raised yet — **Open findings** index is empty (INITIAL phase).
+**Evidence:**
+- build: ok (preset `-O3`; OpenMP 4.5 found and linked)
+- ctest: 5/5 pass — `public/square-32`, `nonsquare-48x80`, `checker-64`,
+  `one-step-50`, `nonsquare-boundary-80x50`, all `max_diff=0.000e+00`
+- vectorization: `g++ -O3 -march=x86-64-v3 -fopenmp -fopt-info-vec-optimized` →
+  `submission.hpp:263: optimized: loop vectorized using 32 byte vectors` (AVX2)
+- alignment: base `% 64 == 0` for 1×1, 7×7, 31×31, 1000×1000, 1024×1024; stride 80
+  for 48×80, 56 for 80×50, 8 for 1×1
+- local edge matrix (outside the repo, 51 shape/step combinations incl. 1×1, 1×N,
+  N×1, 2×2, 3×3, both non-square orientations, 1/3/10 steps): ALL PASS;
+  `old_grid` unmodified (S3); uniform-field invariant holds
+- ASan+UBSan: clean on harness `--check` and on the edge matrix
+- TSan: **not usable for this toolchain** — GCC libgomp + TSan reports
+  false-positive races even for a trivial correct ping-pong
+  `#pragma omp parallel for` (minimal repro `/tmp/tsan_repro.cpp`: 3 races,
+  exit 66), so the reports do not indicate a defect in this submission
+- benchmark (preset `-O3`, default OMP, shared machine — other agent sessions
+  running, load average 2–15): under contention score min 0.68 / median ≈1.7 /
+  best 2.22. In an earlier idle window the same binary reached
+  `runtime_ms≈52–55`, `score≈3.0–3.15` with 16 threads. Local figures are
+  contention-limited; recommend the performance architect re-measure on idle
+  hardware.
+**To:** @design-critic, @performance-architect
+STATUS: DONE
