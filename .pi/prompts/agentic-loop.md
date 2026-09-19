@@ -24,6 +24,13 @@ Do this:
 6. Exit the loop only when `performance-architect` returns `VERDICT: PASS`. Append a
    `DONE` entry to `AGENT_LOG.md` and summarize the final state, score, and open NITs.
 
+Commit at the loop boundaries per `AGENT_ORCHESTRATION.md` §5.1: a baseline commit
+(`B`) after the coder's first implementation, an inner-loop convergence commit (`CI`)
+every time `design-critic` returns `PASS` (before dispatching `performance-architect`),
+and a final outer-loop convergence commit (`CO`) when `performance-architect` returns
+`PASS`. Never commit code that fails `ctest`, and keep tooling commits separate from
+submission commits.
+
 Honour the circuit breakers and escalation rules in `AGENT_ORCHESTRATION.md`. Keep the
 same subagent names (`coder`, `design-critic`, `performance-architect`) for the whole
 run so their sessions persist. Do not poll for results — the harness delivers them.

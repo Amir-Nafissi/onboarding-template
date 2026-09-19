@@ -178,11 +178,48 @@ so their sessions persist across iterations.
 | 0 | Orchestrator | Read `AGENT_LOG.md`; if a run is unfinished, resume from **Current loop state**. | — |
 | 1 | Orchestrator | Append `INIT`/`STATE` entry; set `phase=INITIAL`, `iteration=0`, `outer=0`. | — |
 | 2 | Orchestrator → Coder | Spawn `coder` with the task + pointer to the log and specs. | Coder handoff |
+| 2b | Orchestrator | **Baseline commit (`B`)**: commit the coder's initial implementation + log so reviewers have a stable ref. | — |
 | 3 | Orchestrator → Design Critic | Spawn/message `design-critic` to review the current code. | DC handoff |
-| 4 | Orchestrator | If `CHANGES_REQUESTED`: message `coder` with the findings; `iteration++`; go to 3. If `PASS`: go to 5. | — |
+| 4 | Orchestrator | If `CHANGES_REQUESTED`: message `coder` with the findings; `iteration++`; go to 3. If `PASS`: **inner-loop convergence commit (`CI`)** — commit code + log — then go to 5. | — |
 | 5 | Orchestrator → Perf Architect | Spawn/message `performance-architect` to review, test, benchmark. | PA handoff |
-| 6 | Orchestrator | If `CHANGES_REQUESTED`: message `coder` with the findings; `outer++`; go to 3 (inner loop must pass again). If `PASS`: go to 7. | — |
+| 6 | Orchestrator | If `CHANGES_REQUESTED`: message `coder` with the findings; `outer++`; go to 3 (inner loop must pass again). If `PASS`: **outer-loop convergence commit (`CO`)** — commit code + log — then go to 7. | — |
 | 7 | Orchestrator | Append `DONE`; summarize score, iterations, open NITs; stop. | — |
+
+### 5.1 Commit policy at loop boundaries
+
+Commits mark **convergence points**, not every keystroke. Three commit kinds, in order:
+
+| Tag | When | Contents | Message shape |
+| --- | --- | --- | --- |
+| `B` | Coder's initial implementation is complete, before the first design review. | `src/submission.hpp`, `AGENT_LOG.md` | `feat(submission): initial grid + stencil implementation` |
+| `CI` | **Design Critic returns `PASS`** — the exact boundary between the small and big loops. | `src/submission.hpp`, `AGENT_LOG.md` | `fix(submission): design review iteration <n> converged` |
+| `CO` | **Performance Architect returns `PASS`** — outer loop converged, run complete. | `src/submission.hpp`, `AGENT_LOG.md` | `perf(submission): performance review converged (score <x>)` |
+
+The `CI` commit is mandatory before every `performance-architect` dispatch: it guarantees the performance review is measured against a committed, design-approved revision, and it records the design approval in history. When performance returns findings, the coder's fix re-enters the inner loop and the next design `PASS` produces a new `CI` commit — so each design-approved revision is a checkpoint.
+
+**Rules.**
+- Never commit `src/submission.hpp` in a state that fails `ctest`.
+- Keep tooling commits (`.pi/`, orchestration docs) separate from submission commits.
+- The orchestrator owns commits; reviewers and the coder must not run `git commit`.
+- Do not commit while a subagent is still producing writes to the same files.
+
+**Suggested messages** (keep the loop context in the body):
+
+```text
+fix(submission): design review iteration 2 converged
+
+- DC-003 (padding leaked into boundary copy) fixed
+- DC-004 (unsigned underflow on rows<3) fixed
+- design-critic VERDICT: PASS
+```
+
+```text
+perf(submission): performance review converged (score 4.1)
+
+- median 34.2 ms over 5 runs, -O3 -march=x86-64-v3, OpenMP on
+- roofline: achieved 98 GB/s / best 120 GB/s = 82%
+- performance-architect VERDICT: PASS
+```
 
 **Harness mechanics.** Use `subagent` to start an agent and `subagent_message` to
 continue the *same* named session. The harness delivers results automatically as steer
