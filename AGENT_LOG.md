@@ -155,10 +155,10 @@ VERDICT: PASS | CHANGES_REQUESTED
 | Phase | `DONE` |
 | Inner iteration | `1` |
 | Outer iteration | `2` |
-| Last coder ref | `e920ceb` |
-| Last design verdict | `PASS` |
+| Last coder ref | `comment-only (DC-002/DC-004)` |
+| Last design verdict | `PASS (DC-002/DC-004 closed)` |
 | Last performance verdict | `PASS (DOCUMENT)` |
-| Next action | `none — hardening run complete` |
+| Next action | `none — documentation follow-up complete` |
 | `SCORE_TARGET` | `3.0` |
 | `ROOFLINE_EFFICIENCY` | `70%` |
 | `MAX_INNER` / `MAX_OUTER` | `5` / `6` |
@@ -173,7 +173,6 @@ VERDICT: PASS | CHANGES_REQUESTED
 
 | ID | Severity | Raised by | Location | Summary | Status |
 | --- | --- | --- | --- | --- | --- |
-| DC-002 | NIT | design-critic | `src/submission.hpp:249-257` | Why-comment omits that libgomp ignores `proc_bind` unless places are configured | Open (non-blocking) |
 | PA-002 | NIT | performance-architect | `src/submission.hpp:249-257` | Same as DC-002: comment implies the clause fixes the unbound default; it does not | Open (accepted) |
 | PA-003 | NIT | performance-architect | `src/submission.hpp:258` | Clause overrides an explicit non-spread `OMP_PROC_BIND` | Open (accepted) |
 
@@ -183,6 +182,8 @@ VERDICT: PASS | CHANGES_REQUESTED
 | ID | Severity | Resolution | Closed by |
 | --- | --- | --- | --- |
 | DC-001 | NIT | No-alias comment now states the equal-shape precondition; verified in [0013] | design-critic |
+| DC-002 | NIT | Scope-limit sentence present and accurate in the kernel why-comment; verified in [0019]. Residual score-framing defect split out as `DC-004` | design-critic |
+| DC-004 | MINOR | Score arms now correctly named (16t fully unbound vs `OMP_PLACES=cores OMP_PROC_BIND=spread`) and the separation attributed to the environment; verified in [0021] | design-critic |
 
 </details>
 
@@ -814,3 +815,269 @@ correctness; the contended-window score median (2.25) is below the 3.0 target.
 **Open findings:** DC-002 / PA-002 [NIT] (comment scope limit) and PA-003 [NIT] (clause
 overrides explicit `OMP_PROC_BIND`) — both explicitly accepted as documented.
 **Commits:** `CI`=e920ceb, `CO`=this commit. No push (per instruction).
+
+### [0017] 2026-09-19 18:30Z — orchestrator — STATE
+
+**Phase:** INNER:design-review
+**Iteration:** inner=1 outer=2
+**Action:** Human-directed follow-up after the hardening loop: close the open
+documentation NITs `DC-002`/`PA-002` by adding the libgomp scope-limit sentence to the
+kernel why-comment (and correcting the header comment if it overstates a "stable
+default"). **Comment-only change: no executable behaviour changes, results are
+bit-identical, and the performance verdict is unaffected, so no re-measurement is
+required.** Dispatching `coder` (comment-only), then `design-critic` to verify the NIT
+is closed.
+**Routing:** coder → design-critic → `CI` commit (comment-only)
+**Base:** `e920ceb`/`52285ed` already pushed to `origin/main`.
+
+### [0018] 2026-09-19 23:04Z — coder — FIX
+**Phase:** INNER:design-review
+**Iteration:** inner=1 outer=2
+**Trigger:** `DC-002` (= `PA-002`) [NIT] — `proc_bind(spread)` why-comment implies a fix
+for the unbound default that the clause does not deliver on libgomp.
+**Changes:**
+- `src/submission.hpp` — header comment (l.11-13): replaced "…`proc_bind(spread)`
+  placement for a stable default on shared hosts" with "…a guarded `proc_bind(spread)`
+  clause that only takes effect when the environment configures places"; the old wording
+  claimed a stable default the clause does not provide unbound.
+- `src/submission.hpp` — kernel why-comment (l.252-261): reframed the ~0.99 vs ~3.10
+  figures as a placement-configured env A/B (was implicitly cited as the clause's
+  effect), and added the scope-limit sentence: "Scope limit: on libgomp this clause takes
+  effect only when the environment configures places (`OMP_PLACES`/`OMP_PROC_BIND`);
+  otherwise placement stays unbound, so the clause is defensive rather than a fix for the
+  unbound default." Retained the documented `OMP_PROC_BIND` override (PA-003).
+- Comment-only: no executable code, pragma clause, macro, interface, or numerics touched.
+**Findings addressed:**
+- `DC-002` — FIXED: scope-limit sentence added; header overstatement corrected.
+- `PA-002` — FIXED: same comment edit (finding is identical to DC-002).
+- `PA-003` — UNCHANGED: already explicitly accepted; the override remains documented.
+**Evidence:**
+- diff scope: `git diff -- src/submission.hpp` = comment lines only (2 hunks: l.11-13,
+  l.252-261); no code/clause/macro lines.
+- build: ok — `cmake --preset benchmark && cmake --build --preset benchmark` (GCC 13.3.0,
+  `-O3`, OpenMP on)
+- ctest: 1/1 pass; public cases 5/5 (`--check`) all `max_diff=0.000e+00`
+- bit-identity: `g++ -std=c++17 -O3 -march=x86-64-v3 -fopenmp -E -P` of HEAD vs working
+  tree are **byte-identical** (comments are the only delta)
+- benchmark: not re-run — no executable change, so the [0015] `VERDICT: PASS` stands.
+**To:** @design-critic (verify NIT closed), @performance-architect
+STATUS: DONE
+
+### [0019] 2026-09-19 23:05Z — design-critic — FINDINGS
+**Phase:** INNER (design review, targeted comment-only verification)
+**Iteration:** inner=1 outer=2
+**Reviewed:** `src/submission.hpp` @ uncommitted working tree (`52285ed` + coder
+comment edit, `git diff -- src/submission.hpp` = 2 hunks, `+8/-4`, comment lines
+only: l.9-13 header, l.251-262 why-comment)
+**Verdict:** CHANGES_REQUESTED
+
+**Targeted verification of the `DC-002` fix (all checks run first-hand):**
+- **Diff scope — PASS.** `git diff -- src/submission.hpp` touches comment lines
+  only. No executable statement, pragma clause, macro definition, interface
+  signature, or numeric literal changed.
+- **Byte-identity — PASS.** `g++ -std=c++17 -O3 -march=x86-64-v3 -fopenmp -E -P`
+  of `HEAD:src/submission.hpp` vs the working tree is `cmp`-identical
+  (`BYTE_IDENTICAL`). The claim in `[0018]` is confirmed.
+- **Build / correctness — PASS.** `cmake --preset benchmark && cmake --build
+  --preset benchmark` ok; `ctest --preset benchmark` 1/1; direct
+  `uwhpc_benchmark --check` 5/5 with `max_diff=0.000e+00` (square-32,
+  nonsquare-48x80, checker-64, one-step-50, nonsquare-boundary-80x50).
+- **Scope-limit claim is TRUE — PASS (independent probe).** Scratch OpenMP probe
+  (`proc_bind(spread)`, 4 threads, `sched_getaffinity` in-region), AMD Ryzen 7
+  5800H VM, GCC 13.3/libgomp:
+  - unbound (`env -u OMP_PLACES -u OMP_PROC_BIND`) + clause → cpuset size **16**
+    for every thread (`0-15`), i.e. no pinning; clause inert;
+  - `OMP_PLACES=cores OMP_PROC_BIND=close` + clause → `0-1, 4-5, 8-9, 12-13`
+    (spread; clause wins over `close`);
+  - `OMP_PLACES=cores OMP_PROC_BIND=spread` + clause → same.
+  So "takes effect only when the environment configures places" is correct, and
+  the header wording (`src/submission.hpp:11-13`, "guarded `proc_bind(spread)`
+  clause that only takes effect when the environment configures places") is
+  accurate and no longer overstates a "stable default".
+- **Score framing — FAIL (see `DC-004`).** The `~0.99` figure is documented in
+  this log as the **fully unbound** evaluator-default run (`[0008]` set A:
+  "evaluator-default, unbound, 16 threads … median 138.9 ms, score 0.99"; `[0015]`
+  config A: "unbound default"), with no `OMP_PLACES` and no `OMP_PROC_BIND` set.
+  The new comment calls that same run "packed/close", i.e. it now attributes a
+  placement policy that was never exported.
+
+**Findings:**
+- **DC-004** `MINOR` — `src/submission.hpp:254-256`
+  - **Issue:** "In a placement-configured environment (`OMP_PLACES` plus a spread
+    or close policy) that is what separates the shared-host score modes -- the
+    same binary measured ~0.99 packed/close vs ~3.10 spread." Both halves of the
+    comparison are mislabelled. The `~0.99` arm was measured **fully unbound**
+    (`[0008]` A, `[0015]` A: no `OMP_PLACES`, no `OMP_PROC_BIND`; 16t), so it is
+    not a "close" placement, and the two arms differ by *binding vs no binding*,
+    not by *close vs spread*. The causal phrase "that is what separates the
+    shared-host score modes" still credits the clause with a separation that came
+    from the environment: in the only true clause-vs-no-clause A/B that is also
+    placement-configured, `[0015]` config B (`OMP_PLACES=cores OMP_PROC_BIND=spread`,
+    16t, n=16 interleaved), the clause measures 2.25 vs 2.40 — within noise, and
+    `[0015]` config E shows NEW ≡ OLD with `OMP_PLACES` alone. So the cited
+    numbers are not a placement-configured close/spread A/B of the clause; they
+    are an unbound-vs-bound environment A/B on the pre-clause binary.
+  - **Why:** the acceptance criterion of `DC-002` was that the cited figures be
+    framed as an environment A/B rather than a clause effect; relabelling the
+    unbound arm as "close" substitutes one misattribution for another and
+    contradicts this log's own record. Documentation accuracy of the shipped
+    artifact (quality defect with a concrete fix), not a measurement dispute —
+    performance tuning remains the architect's call.
+  - **Fix (exact):** replace l.254-256 with wording that names the arms
+    correctly, e.g.
+    ```
+    // it. The clause does not create binding on its own (scope limit below), so
+    // the shared-host score modes are an environment property, not a clause
+    // effect: the same (pre-clause) binary measured ~0.99 at 16 threads fully
+    // unbound vs ~3.10 with `OMP_PLACES=cores OMP_PROC_BIND=spread` (log
+    // [0008] A/B). Scope limit: on
+    ```
+    (Deleting the numbers entirely — "the unbound default is bimodal on a shared
+    host while a placement-configured run is not" — is also acceptable; what must
+    go is the "packed/close" label on the unbound arm and any phrasing that
+    credits the clause with the score separation.)
+  - **Acceptance:** the why-comment describes the `~0.99` arm as unbound/default
+    (no `OMP_PLACES`/`OMP_PROC_BIND`) and the `~3.10` arm as
+    `OMP_PLACES=cores OMP_PROC_BIND=spread`, and does not attribute the score
+    separation to the clause. Re-verify with `git diff` (comments only) and
+    `cmp` of `-E -P` output against `HEAD` (must stay byte-identical).
+
+**Findings resolved:**
+- `DC-002` — **CLOSED (verified).** The kernel why-comment now carries the exact
+  requested scope clause ("Scope limit: on libgomp this clause takes effect only
+  when the environment configures places (`OMP_PLACES`/`OMP_PROC_BIND`);
+  otherwise placement stays unbound, so the clause is defensive rather than a fix
+  for the unbound default."), independently reproduced above. The header
+  overstatement is also gone. `PA-002` describes the same sentence and is
+  textually addressed by the same edit, but it is the performance architect's row
+  to close.
+- `PA-003` — untouched (still correctly documented as an accepted trade-off).
+
+**Everything else re-checked, unchanged and conformant:** interface
+(`Grid(std::size_t,std::size_t)` + both `operator()` overloads), D1/D2 flat
+padded allocation, D3/D4 RAII/value semantics, D5 views, D6 `restrict` +
+assertion, D7 boundary copy, D8/D9 row-hoisted vectorisable kernel, D10
+placement-only clause with no `num_threads`/`std::thread`, D12 `#pragma once` +
+ODR-safe macro `#undef`.
+
+**Evidence:**
+- build: ok — `cmake --preset benchmark && cmake --build --preset benchmark`
+- ctest: 1/1 — public cases 5/5, all `max_diff=0.000e+00`
+- bit-identity: `-E -P` output `cmp`-identical to `HEAD` (byte-identical)
+- placement probe: unbound → cpuset 16 (inert); `places=cores`+`close` → spread
+  0-1/4-5/8-9/12-13 (clause wins); `places=cores`+`spread` → same
+- 0 `BLOCKER` / 0 `MAJOR` / 1 `MINOR` (`DC-004`) → not PASS-eligible
+
+**To:** @coder (single comment-line fix, `DC-004`), @orchestrator
+VERDICT: CHANGES_REQUESTED
+
+### [0020] 2026-09-19 23:06Z — coder — FIX
+**Phase:** INNER:design-review
+**Iteration:** inner=1 outer=2
+**Trigger:** `DC-004` [MINOR] — the reframed score sentence mislabelled the ~0.99 arm
+as "packed/close" when it was fully unbound, and still credited the clause with the
+score separation.
+**Changes:**
+- `src/submission.hpp` l.254-256: replaced the "In a placement-configured environment
+  (`OMP_PLACES` plus a spread or close policy) that is what separates the shared-host
+  score modes -- the same binary measured ~0.99 packed/close vs ~3.10 spread." wording
+  with "The clause does not create binding on its own (scope limit below), so the
+  shared-host score modes are an environment property, not a clause effect: the same
+  (pre-clause) binary measured ~0.99 at 16 threads fully unbound vs ~3.10 with
+  `OMP_PLACES=cores OMP_PROC_BIND=spread` (log [0008] A/B). Scope limit: on".
+  The ~0.99 arm is now named as unbound/default and the separation is attributed to the
+  environment, not the clause; the DC-002 scope-limit sentence and the PA-003 override
+  note are unchanged.
+- Comment-only: no code, pragma clause, macro, interface, or numerics touched.
+**Findings addressed:**
+- `DC-004` — FIXED: arms correctly named (16t fully unbound vs `OMP_PLACES=cores
+  OMP_PROC_BIND=spread`), score separation attributed to the environment; the
+  "packed/close" label is gone.
+**Evidence:**
+- diff scope: `git diff -- src/submission.hpp` = comment lines only (2 hunks, l.9-13
+  header, l.251-262 why-comment); no executable lines.
+- byte-identity: `g++ -std=c++17 -O3 -march=x86-64-v3 -fopenmp -E -P` of the working
+  tree vs `git show HEAD:src/submission.hpp | g++ ... -E -P -x c++ -` → `cmp` **BYTE_IDENTICAL**
+- build: ok — `cmake --preset benchmark && cmake --build --preset benchmark` (GCC 13.3.0,
+  `-O3`, OpenMP on)
+- ctest: 1/1 pass; `--check` public cases 5/5, all `max_diff=0.000e+00`
+- benchmark: not re-run — no executable change, so the [0015] `VERDICT: PASS` stands.
+**To:** @design-critic (verify DC-004 closed), @orchestrator
+STATUS: DONE
+
+### [0021] 2026-09-19 23:06Z — design-critic — VERDICT
+**Phase:** INNER (design review, targeted comment-only verification)
+**Iteration:** inner=1 outer=2
+**Reviewed:** `src/submission.hpp` @ uncommitted working tree (`52285ed` + `[0018]`
+and `[0020]` comment edits; `git diff -- src/submission.hpp` = 2 hunks, `+11/-6`,
+comment lines only: l.9-13 header, l.251-262 why-comment)
+**Verdict:** PASS
+
+**Targeted verification of the `DC-004` fix (all checks re-run first-hand):**
+- **Diff scope — PASS.** Comment lines only; no executable statement, pragma
+  clause, macro, interface signature, or numeric literal changed. `[0020]`
+  states this accurately.
+- **Byte-identity — PASS.** `g++ -std=c++17 -O3 -march=x86-64-v3 -fopenmp -E -P`
+  of the working tree vs `git show HEAD:src/submission.hpp` is `cmp`-identical.
+  No behavioural delta from `[0015]`.
+- **Score framing — PASS.** The why-comment (l.253-259) now reads: "The clause
+  does not create binding on its own (scope limit below), so the shared-host
+  score modes are an environment property, not a clause effect: the same
+  (pre-clause) binary measured ~0.99 at 16 threads fully unbound vs ~3.10 with
+  `OMP_PLACES=cores OMP_PROC_BIND=spread` (log [0008] A/B)." Both arms are named
+  with the environment they were actually measured in (`[0008]` set A =
+  evaluator-default, unbound, 16 threads, no `OMP_PLACES`/`OMP_PROC_BIND`;
+  `[0008]` set B = `OMP_NUM_THREADS=16 OMP_PLACES=cores OMP_PROC_BIND=spread`),
+  the same binary is correctly described as pre-clause, and the separation is
+  explicitly attributed to the environment rather than the clause. The
+  "packed/close" label is gone (`grep -c 'packed/close' src/submission.hpp` → 0).
+- **Scope limit — PASS, still accurate** (`[0019]` independent probe reproduced
+  in this pass's context: clause inert with no `OMP_PLACES`/`OMP_PROC_BIND`,
+  forces spread over an explicit `close` when places exist).
+- **Header — PASS, still accurate** (`src/submission.hpp:11-13`: "guarded
+  `proc_bind(spread)` clause that only takes effect when the environment
+  configures places (D10)"); no overstated "stable default".
+- **Build / correctness — PASS.** `cmake --preset benchmark && cmake --build
+  --preset benchmark` ok; `ctest --preset benchmark --output-on-failure`
+  **1/1 pass**; direct `uwhpc_benchmark --check` **5/5** with
+  `max_diff=0.000e+00` (square-32, nonsquare-48x80, checker-64, one-step-50,
+  nonsquare-boundary-80x50).
+
+**Findings:**
+- **None.** 0 `BLOCKER` / 0 `MAJOR` / 0 `MINOR`.
+- Cosmetic note (no finding, no action required): the fixed sentence wraps as
+  "… (log [0008] A/B). Scope limit: on" / "// libgomp this clause …", leaving
+  "on" stranded at end of line `src/submission.hpp:259`. Wrapped differently it
+  would read better; it is not a defect and does not affect the verdict.
+
+**Findings resolved:**
+- `DC-004` — **CLOSED (verified).** Arms correctly named, separation attributed
+  to the environment, "packed/close" removed; byte-identity and 5/5 correctness
+  re-confirmed. Moved to the Closed findings index.
+
+**Open findings after this pass:** `PA-002` [NIT] (performance architect's row,
+textually satisfied by the same edit; only its raiser closes it) and `PA-003`
+[NIT] (accepted trade-off). Neither blocks `PASS`; `DC-002` and `DC-004` are
+closed.
+
+**Evidence:**
+- build: ok — `cmake --preset benchmark && cmake --build --preset benchmark`
+- ctest: 1/1 — public cases 5/5, all `max_diff=0.000e+00`
+- bit-identity: `-E -P` output `cmp`-identical to `HEAD` (byte-identical)
+- comment check: `packed/close` occurrences = 0
+
+**To:** @orchestrator (design review converged; `CI` commit is comment-only),
+@performance-architect (`[0015]` `VERDICT: PASS` unaffected)
+VERDICT: PASS
+
+### [0022] 2026-09-19 18:34Z — orchestrator — DONE
+
+**Phase:** DONE
+**Iteration:** inner=1 outer=2
+**Action:** Documentation follow-up complete. Comment-only change; `design-critic`
+returned `VERDICT: PASS` with `DC-002` and `DC-004` closed. Committed as a single
+comment-only commit; preprocessed output is byte-identical to `HEAD`, so results are
+unchanged and the performance verdict `[0015]` stands — no re-measurement needed.
+**Open findings:** `PA-002` [NIT] (the same sentence; textually satisfied — its raiser,
+the performance architect, owns closing the row) and `PA-003` [NIT] (accepted trade-off).
+**Commit:** this comment-only commit, pushed to `origin/main`.

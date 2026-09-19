@@ -8,8 +8,9 @@
 // no-alias contract with `__restrict__` used only where it is true (D6), a
 // verbatim boundary copy folded into a single parallel row loop (D7/D8), a
 // SIMD-friendly inner loop the compiler can vectorise (D9), and OpenMP over
-// output rows with `proc_bind(spread)` placement for a stable default on shared
-// hosts (D10). The file is header-only and ODR-safe (D12).
+// output rows with a guarded `proc_bind(spread)` clause that only takes effect
+// when the environment configures places (D10). The file is header-only and
+// ODR-safe (D12).
 
 #include <cassert>
 #include <cstddef>
@@ -250,10 +251,16 @@ inline void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   //
   // `proc_bind(spread)` biases placement: it asks the runtime to spread the
   // team over distinct cores/sockets instead of packing and freely migrating
-  // it, which is what makes an unbound run on a shared host bimodal (the
-  // performance review measured the same binary at unbound median score ~0.99
-  // vs ~3.10 with spread). It overrides any `OMP_PROC_BIND` the user exported
-  // for this region -- the accepted cost of a stable default. Placement only:
+  // it. The clause does not create binding on its own (scope limit below), so
+  // the shared-host score modes are an environment property, not a clause
+  // effect: the same (pre-clause) binary measured ~0.99 at 16 threads fully
+  // unbound vs ~3.10 with `OMP_PLACES=cores OMP_PROC_BIND=spread` (log
+  // [0008] A/B). Scope limit: on
+  // libgomp this clause takes effect only when the environment configures
+  // places (`OMP_PLACES`/`OMP_PROC_BIND`); otherwise placement stays unbound,
+  // so the clause is defensive rather than a fix for the unbound default.
+  // Where places exist it overrides any `OMP_PROC_BIND` the user exported for
+  // this region -- the accepted cost of that placement choice. Placement only:
   // thread count is still the runtime's (D10), and no numerical path changes.
   #pragma omp parallel for schedule(static) UWHPC_OMP_PROC_BIND_SPREAD
   for (std::size_t i = 0; i < rows; ++i) {
