@@ -152,13 +152,13 @@ VERDICT: PASS | CHANGES_REQUESTED
 | Field | Value |
 | --- | --- |
 | Run status | `RUNNING` |
-| Phase | `INITIAL` |
-| Inner iteration | `0` |
+| Phase | `OUTER:performance-review` |
+| Inner iteration | `1` |
 | Outer iteration | `0` |
-| Last coder ref | `—` |
-| Last design verdict | `—` |
+| Last coder ref | `41d6cd4` |
+| Last design verdict | `PASS` |
 | Last performance verdict | `—` |
-| Next action | `coder: implement src/submission.hpp` |
+| Next action | `performance-architect: review + test + benchmark` |
 | `SCORE_TARGET` | `3.0` |
 | `ROOFLINE_EFFICIENCY` | `70%` |
 | `MAX_INNER` / `MAX_OUTER` | `5` / `6` |
@@ -173,7 +173,7 @@ VERDICT: PASS | CHANGES_REQUESTED
 
 | ID | Severity | Raised by | Location | Summary | Status |
 | --- | --- | --- | --- | --- | --- |
-| — | — | — | — | _no findings yet_ | — |
+| DC-001 | NIT | design-critic | `src/submission.hpp:215-220` | No-alias comment omits the equal-shape precondition | Open (non-blocking) |
 
 <details>
 <summary>Closed findings</summary>
@@ -261,3 +261,110 @@ Dispatching `coder` to implement `src/submission.hpp` end-to-end against
   hardware.
 **To:** @design-critic, @performance-architect
 STATUS: DONE
+
+### [0004] 2026-09-19 17:26Z — orchestrator — STATE
+
+**Phase:** INNER:design-review
+**Iteration:** inner=0 outer=0
+**Action:** Coder handoff received and independently verified (build ok, ctest 5/5).
+Baseline commit `B` = `41d6cd4`. Dispatching `design-critic` to review
+`src/submission.hpp` against `DESIGN.md` D1–D12 and `REQUIREMENTS.md`.
+**Routing:** design-critic → review @ `41d6cd4`
+**Budget:** MAX_INNER=5 MAX_OUTER=6
+**Commit cadence:** next commit is `CI`, only if the design critic returns `VERDICT: PASS`.
+
+### [0005] 2026-09-19 17:31Z — design-critic — FINDINGS
+
+**Phase:** INNER (design review)
+**Iteration:** 1
+**Reviewed:** `src/submission.hpp` @ `41d6cd4` (working tree byte-identical to the
+commit; `git status` shows only `AGENT_LOG.md` modified)
+**Verdict:** PASS
+
+**Findings:**
+- **DC-001** `NIT` — `src/submission.hpp:215-220`
+  - **Issue:** The no-alias precondition comment enumerates "distinct grids with
+    disjoint storage" (D6) but not the equal-shape precondition that the
+    following `assert(in.rows() == out.rows() && in.cols() == out.cols())`
+    enforces; in release builds that assert is compiled out, leaving the
+    requirement implicit.
+  - **Why:** Documentation/quality only. The harness always supplies matching
+    shapes (`bench/main.cpp` ping-pongs two `Grid{rows, cols}` of the same
+    shape), so correctness is unaffected — hence `NIT`, not `MINOR`.
+  - **Fix:** extend the precondition comment by one clause: "…and both grids must
+    describe the same shape; the kernel indexes `out` while reading `in`."
+  - **Acceptance:** Comment present; no behavioural change. Non-blocking.
+
+**Findings: none blocking.** The following were verified against the frozen specs
+and are conformant:
+
+- **Interface (exact):** `Grid(std::size_t,std::size_t)` and both
+  `double& operator()(std::size_t,std::size_t)` / `double operator()(...) const`
+  are preserved (`src/submission.hpp:157-201`); `rows_`/`cols_` private members
+  retained; zero-initialised (G1–G5).
+- **D1/D2:** one flat row-major `data_`; `stride_ = padded_stride(cols)`,
+  `round_up(cols, 8)`, distinct from `cols` (l.169-170); 64-byte base alignment
+  via C++17 aligned `new`/`delete` (l.45-53). Probe confirmed `base() % 64 == 0`
+  for every shape and that all padding elements stay `0.0` after stepping —
+  padding never semantically visible.
+- **D3/D4:** rule-of-zero `std::vector<double, AlignedAllocator>`; zero-init via
+  `assign(count, 0.0)` (l.178); `padded_stride` overflow guard (l.31-37) and
+  `rows_*stride_` vs `max_size()` guard (l.172-177); deep copy and move verified.
+- **D5/D11:** `ConstGridView`/`GridView` carry data+rows+cols+stride as one
+  value; ctors/accessors `noexcept`, allocation-free; mutable vs read-only is a
+  type distinction.
+- **D6:** contract documented above the kernel; debug
+  `assert(&old_grid != &new_grid)` plus pointer-range `buffers_overlap` check
+  (l.219-222); `__restrict__` appears only on row pointers and is true given the
+  verified in/out disjointness. Fired correctly in a deliberate same-object
+  probe.
+- **D7:** boundary rows copied with `memcpy` of exactly `cols` logical doubles
+  (l.244); interior-row left/right cells copied verbatim (l.253-256); padding
+  never copied.
+- **D8/D9/D10:** row bases hoisted (l.248-250); guard `i + 1 == rows` (l.242,
+  no unsigned underflow); canonical `j < last` interior loop (l.263-268)
+  vectorised to 32-byte (AVX2) vectors with an inherent scalar remainder; a
+  single `#pragma omp parallel for schedule(static)` per call, no hardcoded
+  thread count, no cell written twice.
+- **D12:** `#pragma once`; named `detail` namespace; all free helpers `inline`;
+  no debug prints, no commented-out experiments. Two-translation-unit link test
+  passed (ODR-safe).
+- **UB sweep:** early return for `rows==0 || cols==0`; `cols >= 1` guarantees
+  `cols-1`, `i-1`, `i+1` in range; harness `--check` and the independent probe
+  clean under ASan+UBSan; no warnings under
+  `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`.
+
+**Evidence:**
+- build: ok — `cmake --preset benchmark`; OpenMP found (`OpenMP_CXX_FLAGS=-fopenmp`)
+- ctest: 1/1 (`correctness`); direct `--check` = 5/5 public cases, each
+  `max_diff=0.000e+00`
+- eval-like build (`-O3 -march=x86-64-v3 -fopenmp`): `--check` 5/5
+- independent scratch probe (outside the repo): **177/177** checks over 22 shapes
+  × 4 step counts, incl. `1×1`, `1×N`, `N×1`, `2×2`, `3×3` and both non-square
+  orientations; uniform-field invariance; result vs. independent reference;
+  padding isolation; alignment; deep-copy/move; run at `OMP_NUM_THREADS=1` and
+  `OMP_NUM_THREADS=8`
+- ASan+UBSan (asserts enabled): probe and harness `--check` clean
+- same-object contract probe: debug assert fires as designed (expected)
+
+**To:** @coder, @performance-architect
+**Note for @performance-architect:** the structural performance decisions are all
+present (flat padded layout, hoisted bases, vectorisable loop, OpenMP rows), but
+local benchmark `score` is highly variable on this shared box — observed 0.83–1.80
+across runs (`runtime_ms` 94–202, 16 cores, load ≈1.9). That is contention/variance,
+not a design finding; please re-measure on idle hardware against `SCORE_TARGET=3.0`.
+VERDICT: PASS
+
+### [0006] 2026-09-19 17:33Z — orchestrator — STATE
+
+**Phase:** OUTER:performance-review
+**Iteration:** inner=1 outer=0
+**Action:** Inner loop converged. `design-critic` returned `VERDICT: PASS` on
+`src/submission.hpp` @ `41d6cd4` (0 BLOCKER/MAJOR/MINOR; DC-001 [NIT] open and
+non-blocking). Inner-loop convergence commit `CI`: `src/submission.hpp` unchanged,
+`AGENT_LOG.md` records the approval. Dispatching `performance-architect`.
+**Routing:** performance-architect → review + ctest + benchmark @ outer=0
+**Budget:** MAX_INNER=5 MAX_OUTER=6
+**Targets:** SCORE_TARGET=3.0, ROOFLINE_EFFICIENCY=70%
+**Note:** the design critic observed heavy local contention (score 0.83–1.80); the
+architect should report distributions and state the load conditions.
