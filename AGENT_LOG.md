@@ -158,7 +158,7 @@ VERDICT: PASS | CHANGES_REQUESTED
 | Last coder ref | `comment-only (DC-002/DC-004)` |
 | Last design verdict | `PASS (DC-002/DC-004 closed)` |
 | Last performance verdict | `PASS (DOCUMENT)` |
-| Next action | `none — documentation follow-up complete` |
+| Next action | `none — all findings closed; run complete` |
 | `SCORE_TARGET` | `3.0` |
 | `ROOFLINE_EFFICIENCY` | `70%` |
 | `MAX_INNER` / `MAX_OUTER` | `5` / `6` |
@@ -173,8 +173,7 @@ VERDICT: PASS | CHANGES_REQUESTED
 
 | ID | Severity | Raised by | Location | Summary | Status |
 | --- | --- | --- | --- | --- | --- |
-| PA-002 | NIT | performance-architect | `src/submission.hpp:249-257` | Same as DC-002: comment implies the clause fixes the unbound default; it does not | Open (accepted) |
-| PA-003 | NIT | performance-architect | `src/submission.hpp:258` | Clause overrides an explicit non-spread `OMP_PROC_BIND` | Open (accepted) |
+| — | — | — | — | No open findings (all rows resolved; see Closed below) | — |
 
 <details>
 <summary>Closed findings</summary>
@@ -184,6 +183,8 @@ VERDICT: PASS | CHANGES_REQUESTED
 | DC-001 | NIT | No-alias comment now states the equal-shape precondition; verified in [0013] | design-critic |
 | DC-002 | NIT | Scope-limit sentence present and accurate in the kernel why-comment; verified in [0019]. Residual score-framing defect split out as `DC-004` | design-critic |
 | DC-004 | MINOR | Score arms now correctly named (16t fully unbound vs `OMP_PLACES=cores OMP_PROC_BIND=spread`) and the separation attributed to the environment; verified in [0021] | design-critic |
+| PA-002 | NIT | Scope-limit sentence present and accurate in the kernel why-comment; stated acceptance "comment states the scope limit, or this log entry is the record" is met. Closed by the raiser after `[0019]`/`[0021]`; preprocessed output byte-identical to the `[0015]`-measured revision, correctness 5/5 | performance-architect |
+| PA-003 | NIT | **Accepted (documented)** trade-off: the clause overrides an explicit non-spread `OMP_PROC_BIND` only where places exist; force-spread is the better placement for this bandwidth-bound kernel (D4: spread spreads across cores) and no regression was measured. Rationale fully recorded in `[0015]`/`[0021]` and in the file comment | performance-architect |
 
 </details>
 
@@ -1081,3 +1082,78 @@ unchanged and the performance verdict `[0015]` stands — no re-measurement need
 **Open findings:** `PA-002` [NIT] (the same sentence; textually satisfied — its raiser,
 the performance architect, owns closing the row) and `PA-003` [NIT] (accepted trade-off).
 **Commit:** this comment-only commit, pushed to `origin/main`.
+
+### [0023] 2026-09-19 23:09Z — performance-architect — VERDICT
+
+**Phase:** OUTER (performance review, targeted close-out of PA-002 / PA-003)
+**Iteration:** outer=2 (inner=1)
+**Reviewed:** `src/submission.hpp` @ working tree (`0e2d9ce`, clean). No
+re-measurement performed — see "Why no re-measurement" below.
+
+**1. Executable-identity of the comment-only change — VERIFIED (first-hand).**
+`g++ -std=c++17 -O3 -march=x86-64-v3 -fopenmp -E -P` was run on the *preprocessed*
+header in three revisions and the outputs are byte-identical
+(`sha256 a4404d8e22a5b2f69bc9ecb8e02e6a02cd9e265f65a24b6cb792f6baa0c87ad3` for all):
+
+- working tree (`src/submission.hpp`, post-`0e2d9ce`) — `cmp`-identical to
+- `52285ed:src/submission.hpp` (pre-fix revision) — and to
+- `e920ceb:src/submission.hpp` (**the exact revision `[0015]` measured**).
+
+The clause's expansion, the pragma, the kernel, the macros and every numeric
+literal are unchanged; the diff is comment text only. **A comment-only change
+cannot alter the executable, so re-benchmarking would measure the same binary and
+is unnecessary.** The `[0015]` performance numbers (roofline 100 % of the
+same-pattern streaming ceiling; score median 2.25 / best 3.57 in the contended
+window) therefore remain valid verbatim for this revision.
+
+**2. Correctness gate — 5/5 PASS.** `cmake --preset benchmark` + build ok;
+`ctest --preset benchmark --output-on-failure` **1/1 pass**;
+`./build/benchmark/uwhpc_benchmark --check` **5/5** — public/square-32,
+nonsquare-48x80, checker-64, one-step-50, nonsquare-boundary-80x50, all
+`max_diff=0.000e+00`.
+
+**3. `PA-002` — CLOSED.** The acceptance condition I stated in `[0015]` ("comment
+states the scope limit, or this log entry is the record") is satisfied: the kernel
+why-comment now reads *"Scope limit: on libgomp this clause takes effect only when
+the environment configures places (`OMP_PLACES`/`OMP_PROC_BIND`); otherwise
+placement stays unbound, so the clause is defensive rather than a fix for the
+unbound default."* (`src/submission.hpp:~259-262`), and the score arms are now
+labelled as an environment A/B (`~0.99` at 16 threads fully unbound vs `~3.10`
+with `OMP_PLACES=cores OMP_PROC_BIND=spread`), attributing the separation to the
+environment, not the clause — which matches my own measurements in `[0015]`
+(config A inert; config E NEW ≡ OLD). With the raiser (me) accepting, the row is
+resolved and moved to the **Closed findings** index. **`[0015]` `VERDICT: PASS`
+stands unchanged.**
+
+**4. `PA-003` — CLOSED as ACCEPTED (documented trade-off).** The rationale is
+fully recorded (`[0015]` §Findings, `[0015]` mechanism table D4, `[0021]`, and the
+file comment lines ~260-262). The clause overrides an explicit non-spread
+`OMP_PROC_BIND` only when places exist; at the evaluated shape (16t / 8 places)
+`close` ≡ `spread` so there is no measurable effect, and where the two differ
+(4t / 8 places) spread places threads on distinct cores, which is the better
+choice for this bandwidth-bound kernel. No regression was measured. Recording it
+as **Accepted (documented)** and moving it to the Closed index; it was never
+PASS-blocking.
+
+**5. Open findings after this pass: NONE.** Index row: *"No open findings"*.
+`DC-001`/`DC-002`/`DC-004` (design) and `PA-002`/`PA-003` (performance) are all
+closed.
+
+**Verdict:** PASS — unchanged. Correctness 5/5, roofline at 100 % of the
+same-pattern streaming ceiling (≥70 % required), 0 `BLOCKER` / 0 `MAJOR` /
+0 `MINOR` open, both NITs explicitly accepted/closed.
+**To:** @orchestrator
+VERDICT: PASS
+
+### [0024] 2026-09-19 18:38Z — orchestrator — DONE
+
+**Phase:** DONE
+**Iteration:** inner=1 outer=2
+**Action:** All review loops closed. `performance-architect` close-out (`[0023]`) moved
+`PA-002` and `PA-003` to the Closed index after confirming the comment-only change is
+executable-identical (sha256 `a4404d8e…` across the working tree, `52285ed`, and
+`e920ceb` — the revision `[0015]` measured) and `ctest` 5/5. The `[0015]` performance
+verdict stands unchanged (roofline 100 % of the same-pattern streaming ceiling).
+**Open findings:** **none.**
+**Final commits pushed to `origin/main`:** `e920ceb` (CI), `52285ed` (CO),
+`0e2d9ce` (comment fix), and this log close-out commit.
