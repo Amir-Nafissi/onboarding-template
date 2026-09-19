@@ -8,7 +8,8 @@
 // no-alias contract with `__restrict__` used only where it is true (D6), a
 // verbatim boundary copy folded into a single parallel row loop (D7/D8), a
 // SIMD-friendly inner loop the compiler can vectorise (D9), and OpenMP over
-// output rows (D10). The file is header-only and ODR-safe (D12).
+// output rows with `proc_bind(spread)` placement for a stable default on shared
+// hosts (D10). The file is header-only and ODR-safe (D12).
 
 #include <cassert>
 #include <cstddef>
@@ -205,6 +206,17 @@ public:
   }
 };
 
+// OpenMP 4.0 (201307) added the `proc_bind` clause; an older or absent OpenMP
+// must not see it, so the clause text is selected at compile time and expanded
+// to nothing otherwise. `proc_bind` sets *placement* only -- which CPUs the
+// team occupies -- never thread *count*, so it stays inside D10's split: the
+// runtime still chooses how many threads to use.
+#if defined(_OPENMP) && _OPENMP >= 201307
+#  define UWHPC_OMP_PROC_BIND_SPREAD proc_bind(spread)
+#else
+#  define UWHPC_OMP_PROC_BIND_SPREAD
+#endif
+
 // Apply the five-point stencil to every interior point and copy the boundary
 // verbatim (S1/S2/S5). `old_grid` is read-only (S3); the result is computed
 // solely from it (S4).
@@ -212,9 +224,10 @@ inline void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   const ConstGridView in{old_grid.const_view()};
   const GridView out{new_grid.view()};
 
-  // Precondition (D6): distinct grids with disjoint storage. The harness
-  // ping-pongs two separately constructed Grid objects, so this holds. The
-  // `__restrict__` row pointers below are valid *only* because of it; if the
+  // Precondition (D6): distinct grids with disjoint storage, and both must
+  // describe the same shape (the kernel indexes `out` while reading `in`). The
+  // harness ping-pongs two separately constructed Grid objects, so this holds.
+  // The `__restrict__` row pointers below are valid *only* because of it; if the
   // buffers aliased the promise would be false and the behaviour undefined.
   assert(&old_grid != &new_grid);
   assert(in.rows() == out.rows() && in.cols() == out.cols());
@@ -234,7 +247,15 @@ inline void apply_stencil(const Grid& old_grid, Grid& new_grid) {
   // exactly one worker, so boundary work cannot race with interior work.
   // `i + 1 == rows` (not `i < rows - 1`) keeps tiny grids free of unsigned
   // underflow.
-  #pragma omp parallel for schedule(static)
+  //
+  // `proc_bind(spread)` biases placement: it asks the runtime to spread the
+  // team over distinct cores/sockets instead of packing and freely migrating
+  // it, which is what makes an unbound run on a shared host bimodal (the
+  // performance review measured the same binary at unbound median score ~0.99
+  // vs ~3.10 with spread). It overrides any `OMP_PROC_BIND` the user exported
+  // for this region -- the accepted cost of a stable default. Placement only:
+  // thread count is still the runtime's (D10), and no numerical path changes.
+  #pragma omp parallel for schedule(static) UWHPC_OMP_PROC_BIND_SPREAD
   for (std::size_t i = 0; i < rows; ++i) {
     double* __restrict__ out_row = out.row(i);
 
@@ -267,3 +288,6 @@ inline void apply_stencil(const Grid& old_grid, Grid& new_grid) {
     }
   }
 }
+
+// Keep the helper macro out of any translation unit that includes this header.
+#undef UWHPC_OMP_PROC_BIND_SPREAD

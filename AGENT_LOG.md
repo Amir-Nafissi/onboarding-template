@@ -151,14 +151,14 @@ VERDICT: PASS | CHANGES_REQUESTED
 
 | Field | Value |
 | --- | --- |
-| Run status | `DONE` |
-| Phase | `DONE` |
+| Run status | `RUNNING` |
+| Phase | `OUTER:performance-review` |
 | Inner iteration | `1` |
-| Outer iteration | `1` |
-| Last coder ref | `41d6cd4` |
-| Last design verdict | `PASS` |
-| Last performance verdict | `PASS` |
-| Next action | `none — run complete` |
+| Outer iteration | `2` |
+| Last coder ref | `working tree (proc_bind hardening)` |
+| Last design verdict | `PASS (DC-002 NIT open)` |
+| Last performance verdict | `— (re-measuring)` |
+| Next action | `performance-architect: re-measure + decide accept/document/escalate` |
 | `SCORE_TARGET` | `3.0` |
 | `ROOFLINE_EFFICIENCY` | `70%` |
 | `MAX_INNER` / `MAX_OUTER` | `5` / `6` |
@@ -173,14 +173,14 @@ VERDICT: PASS | CHANGES_REQUESTED
 
 | ID | Severity | Raised by | Location | Summary | Status |
 | --- | --- | --- | --- | --- | --- |
-| DC-001 | NIT | design-critic | `src/submission.hpp:215-220` | No-alias comment omits the equal-shape precondition | Open (non-blocking) |
+| DC-002 | NIT | design-critic | `src/submission.hpp:249-257` | Why-comment omits that libgomp ignores `proc_bind` unless places are configured | Open (non-blocking) |
 
 <details>
 <summary>Closed findings</summary>
 
 | ID | Severity | Resolution | Closed by |
 | --- | --- | --- | --- |
-| — | — | — | — |
+| DC-001 | NIT | No-alias comment now states the equal-shape precondition; verified in [0013] | design-critic |
 
 </details>
 
@@ -480,3 +480,208 @@ the no-alias comment.
 peel (measured unnecessary at the ceiling).
 **Commits:** `B`=41d6cd4 (baseline), `CI`=2371fde (design converged), `CO`=this commit
 (performance converged).
+
+### [0010] 2026-09-19 17:52Z — orchestrator — STATE
+
+**Phase:** OUTER:performance-review
+**Iteration:** inner=1 outer=2
+**Action:** Human-triggered **hardening pass**. Objective: reduce the unbound/default
+score variance on shared hosts (raw captures showed scores 0.56–3.26; the previous
+PASS rested on the roofline path, not a stable score). Hypothesis: add OpenMP thread
+affinity via `proc_bind(spread)` on the interior row loop.
+**Commits suspended for this pass (human instruction): do NOT commit or push.**
+**Routing:** coder implements → design-critic validates (incl. the D10 relationship)
+→ performance-architect re-measures variance.
+**Budget:** MAX_INNER=5 MAX_OUTER=6; outer iterations used 2/6.
+**Note:** D10 assigns thread *count* to the runtime; `proc_bind` sets *placement* only.
+Any departure from “affinity belongs to the runtime” must be documented and measured.
+
+### [0011] 2026-09-19 17:38Z — coder — FIX
+
+**Phase:** OUTER:performance-review
+**Iteration:** inner=1 outer=2
+**Trigger:** TASK [0010] — human-triggered hardening pass: add `proc_bind(spread)`
+to the interior row loop.
+**Changes:**
+- `src/submission.hpp` — added a compile-time guard macro
+  `UWHPC_OMP_PROC_BIND_SPREAD`, keyed on `_OPENMP >= 201307` (OpenMP 4.0 is the
+  first version with the `proc_bind` clause). It expands to `proc_bind(spread)`
+  under a new-enough OpenMP and to nothing otherwise, so an older/absent OpenMP
+  still compiles the same pragma. It is used as the trailing clause token on the
+  existing `#pragma omp parallel for schedule(static)` and `#undef`-ed at the end
+  of the header so it does not leak into including TUs. Placement only — thread
+  *count* is still the runtime's (D10); no numerical path, `Grid` interface, or
+  boundary contract changed. Added a why-comment covering what the clause does,
+  that it overrides `OMP_PROC_BIND` for this region, and why that is the accepted
+  cost of a stable default.
+- `src/submission.hpp` — DC-001 NIT: extended the no-alias precondition comment
+  to state the equal-shape requirement that the following `assert` enforces.
+**Findings addressed:**
+- `DC-001` — FIXED: precondition comment now says both grids must describe the
+  same shape; no behavioural change.
+- No new findings raised this turn; log entry is proactive hardening per the task.
+**Evidence:**
+- build: ok — `cmake --preset benchmark && cmake --build --preset benchmark` (GCC
+  13.3.0, libgomp.so.1, `-O3`)
+- ctest: 5/5 pass — `ctest --preset benchmark` 1/1; direct `--check` all five
+  public cases `max_diff=0.000e+00` (identical to the pre-change binary)
+- vectorization: `-march=x86-64-v3 -fopt-info-vec-optimized` still reports
+  `submission.hpp:284 optimized: loop vectorized using 32 byte vectors` (AVX2),
+  unchanged by the clause
+- strict warnings: `-Wall -Wextra -Wpedantic -Wshadow -Wconversion` clean with
+  OpenMP
+- portability of the guard (preprocessor evidence):
+  - with `-fopenmp`: pragma expands to
+    `#pragma omp parallel for schedule(static) proc_bind(spread)`
+  - with `-fopenmp -U_OPENMP` (forces `< 201307`): pragma emits
+    `#pragma omp parallel for schedule(static)` — clause correctly dropped
+  - without `-fopenmp`: compiles; only the pre-existing `-Wunknown-pragmas`
+    warnings for both existing `omp` pragmas (parallel + simd), no new warning
+- **clause is active and overrides `OMP_PROC_BIND`** (`OMP_DISPLAY_AFFINITY=true`,
+  4 threads, `OMP_PLACES=cores OMP_PROC_BIND=close`):
+  - NEW binary → `0-1, 4-5, 8-9, 12-13` (spread; clause wins over `close`)
+  - baseline binary (no clause) → `0-1, 2-3, 4-5, 6-7` (packed)
+- **CAVEAT — the clause is inert in the fully-unbound default case on this
+  runtime.** With both `OMP_PLACES` and `OMP_PROC_BIND` unset, libgomp 13.3
+  reports affinity `0-15` for every thread even with the clause present (no
+  pinning), exactly like the baseline. GCC's libgomp docs state `OMP_PROC_BIND`
+  defaults to FALSE when `OMP_PLACES`/`GOMP_CPU_AFFINITY` is unset and threads
+  "may be moved between CPUs following no placement policy"; an LLVM-forum/Arm
+  report confirms the same "`proc_bind` clause ignored unless the env has enabled
+  it". So the hypothesis only bites when the runtime has places configured
+  (`OMP_PLACES` set, or `OMP_PROC_BIND` exported at init). This matters for the
+  stated objective (unbound/default variance) and should drive the performance
+  architect's interpretation of the re-measurement.
+- sanity benchmark (indicative only — shared host, load 0.2–0.9; architect to do
+  the rigorous distribution):
+  - baseline unbound (n=6): score median ≈1.23, range 0.78–1.60
+  - NEW unbound (n=7): score median ≈1.43, range 0.88–1.69 — same distribution
+    (consistent with the clause being inert without places) ⇒ no regression
+  - baseline `OMP_PROC_BIND=spread` (n=5): median ≈2.13
+  - NEW `OMP_PROC_BIND=spread` (n=7): median ≈2.44
+  - NEW `OMP_PLACES=cores OMP_PROC_BIND=spread` (n=7): median ≈2.45, range
+    1.57–2.80
+  - conclusion: no correctness or throughput regression; default-case variance is
+    unchanged on libgomp because the clause does not bind without places.
+**To:** @design-critic, @performance-architect
+**Note:** commits intentionally not made (human instruction).
+STATUS: DONE
+
+### [0012] 2026-09-19 18:02Z — orchestrator — STATE
+
+**Phase:** INNER:design-review
+**Iteration:** inner=1 outer=2
+**Action:** Coder handoff for the hardening pass received. **Commits re-enabled by human**
+(supersedes the suspension in `[0010]`): the orchestrator will make the `CI` commit on
+design `PASS` and the `CO` commit on performance `PASS`. `DC-001` was also closed by the
+coder (comment-only). Dispatching `design-critic` to review the hardened (uncommitted)
+`src/submission.hpp`.
+**Routing:** design-critic → review working tree; then performance-architect
+**Note:** the coder flagged (log `[0011]`) that on GCC/libgomp 13.3 `proc_bind(spread)`
+is inert when both `OMP_PLACES` and `OMP_PROC_BIND` are unset, so the default-case
+variance is unchanged; the performance architect must decide accept / document / escalate.
+**Policy:** commits at boundaries `CI` (design PASS) and `CO` (performance PASS); no push.
+
+### [0013] 2026-09-19 17:41Z — design-critic — FINDINGS
+
+**Phase:** INNER (design review)
+**Iteration:** 1
+**Reviewed:** `src/submission.hpp` @ uncommitted working tree (`aa4e962` + `proc_bind`
+hardening diff, `+34/-12`; `git status` shows only `AGENT_LOG.md` and
+`src/submission.hpp` modified)
+**Verdict:** PASS
+
+**Findings:**
+- **DC-002** `NIT` — `src/submission.hpp:249-257`
+  - **Issue:** The why-comment presents `proc_bind(spread)` as the remedy for the
+    bimodal unbound case but omits the scope limit the coder measured in `[0011]`:
+    on GCC/libgomp 13.3 the clause is inert unless the environment configures places
+    (`OMP_PLACES` and/or `OMP_PROC_BIND`), because libgomp leaves placement unbound
+    by default. The cited numbers (unbound `~0.99` vs `~3.10`) come from an
+    `OMP_PLACES=cores OMP_PROC_BIND=spread` environment run, i.e. an env A/B, not a
+    clause A/B. Reproduced below.
+  - **Why:** Documentation precision only; nothing in the comment is false. The
+    override of `OMP_PROC_BIND` is real and was reproduced, and the measurement is
+    labelled correctly. But a reader can infer a benefit in the fully-unbound
+    default that the clause does not deliver on this runtime. Non-blocking: the
+    caveat is fully recorded in log `[0011]`, and whether the clause is worth
+    keeping is the performance architect's call, not a correctness matter.
+  - **Fix (optional):** append one scope clause, e.g. "…the accepted cost of a stable
+    default; on libgomp the clause takes effect only when the environment configures
+    places (`OMP_PLACES`/`OMP_PROC_BIND`), otherwise placement stays unbound."
+  - **Acceptance:** Comment states the scope limit, or there is an explicit decision
+    to keep that discussion in the log only. No behavioural change either way.
+
+**Findings resolved:**
+- `DC-001` — **CLOSED (verified).** Precondition comment now reads "distinct grids
+  with disjoint storage, and both must describe the same shape (the kernel indexes
+  `out` while reading `in`)", matching the following `assert`. Comment-only; no
+  behavioural change.
+
+**Conformant / verified this pass (hardening diff only, read against the frozen specs):**
+
+- **Diff scope.** `git diff -- src/submission.hpp` touches only: the file header
+  comment (l.8-12), the guard macro (l.209-218), the no-alias comment (l.228-232),
+  the kernel why-comment + pragma clause (l.249-258), and the trailing `#undef`
+  (l.292-293). No change to the `Grid` class, views, allocator, interface, boundary
+  copy, or the interior expression. Interface (`Grid(std::size_t,std::size_t)` +
+  both `operator()` overloads) preserved exactly (`src/submission.hpp:155-201`).
+- **Guard correctness.** `#if defined(_OPENMP) && _OPENMP >= 201307` is the correct
+  predicate for the `proc_bind` clause (OpenMP 4.0). Preprocessor evidence:
+  `-fopenmp` → `#pragma omp parallel for schedule(static) proc_bind(spread)`
+  (`_OPENMP == 201511` on GCC 13.3, `201307` is the minimum claimed support);
+  `-fopenmp -U_OPENMP` → clause dropped; no `-fopenmp` → pragma ignored, exactly as
+  before the change (`-Wunknown-pragmas` fires for both `omp` pragmas, i.e. no new
+  warning class). Clang 18.1.3 expands the macro in the pragma in both modes and
+  compiles the TU cleanly with `-fopenmp -Wall -Wextra -Wpedantic`.
+- **No macro leak / ODR.** `g++ -E -dM` on a TU that includes the header reports
+  **0** definitions of `UWHPC_OMP_PROC_BIND_SPREAD` (the `#undef` at EOF works).
+  Nothing else in the file has external linkage or anonymous-namespace state (D12).
+- **D10 conformance.** The clause sets *placement* only; no `num_threads`/
+  `omp_set_num_threads`, no `std::thread`, still **one** parallel region per call,
+  `schedule(static)` unchanged, boundary still inside the row loop (no cell written
+  twice). `OMP_NUM_THREADS` is still honoured (affinity probe used 4 threads).
+- **Numerics/bit-identity.** Placement does not affect the static row partition, so
+  per-row results are unchanged. `ctest --preset benchmark` 1/1 and
+  `uwhpc_benchmark --check` 5/5 with `max_diff=0.000e+00` on every public case
+  (square-32, nonsquare-48x80, checker-64, one-step-50, nonsquare-boundary-80x50).
+- **No UB.** Scratch ASan+UBSan build (`-O2 -fsanitize=address,undefined -fopenmp`,
+  `OMP_NUM_THREADS=4`, leak detection on) passes 5/5 with no diagnostics.
+
+**Evidence:**
+- build: ok — `cmake --preset benchmark && cmake --build --preset benchmark` (GCC
+  13.3.0, `-O3`, libgomp found, binary newer than the edit)
+- ctest: 1/1 — public cases 5/5, all `max_diff=0.000e+00`
+- sanitizer probe: ASan+UBSan+LeakSanitizer 5/5 clean
+- macro probe: `-E -dM` → 0 leaked definitions
+- placement probe (independent reproduction of `[0011]`):
+  - `OMP_PLACES=cores OMP_PROC_BIND=close` + clause → affinity
+    `0-1, 4-5, 8-9, 12-13` (spread; the clause wins over `close`)
+  - fully unbound (`env -u OMP_PLACES -u OMP_PROC_BIND`) → affinity `0-15` for all
+    threads, i.e. no binding — confirms the clause is inert without configured places
+    (basis of DC-002)
+- strict warnings: `-Wall -Wextra -Wpedantic -Wshadow -Wconversion` clean with
+  `-fopenmp`; without OpenMP the only warnings are the pre-existing
+  `-Wunknown-pragmas` for the two `omp` pragmas
+
+**To:** @coder, @performance-architect
+**Note for the performance architect:** the structural change is correctly scoped
+and the clause demonstrably overrides `OMP_PROC_BIND` when places exist, but it is
+inert in a fully-default environment on libgomp. Whether that satisfies the human's
+"reduce unbound variance" objective is your measurement call; design review does not
+block on it.
+STATUS: DONE
+VERDICT: PASS
+
+### [0014] 2026-09-19 18:08Z — orchestrator — STATE
+
+**Phase:** OUTER:performance-review
+**Iteration:** inner=1 outer=2
+**Action:** Hardening design review converged — `design-critic` returned `VERDICT: PASS`
+(`DC-001` closed; `DC-002` [NIT] open, non-blocking). Inner-loop convergence commit
+`CI` made (test-only macro guard, placement-only change). Dispatching
+`performance-architect` to re-measure the unbound/contended score distribution and to
+decide on the coder's caveat: accept as-is, document an `OMP_PLACES` requirement, or
+escalate to a stronger placement mechanism.
+**Routing:** performance-architect → re-measure, outer=2
+**Targets:** SCORE_TARGET=3.0, ROOFLINE_EFFICIENCY=70%
